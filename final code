@@ -1,0 +1,765 @@
+### NGS Informatics 2019 - Final Project Code (Sheena Faye Garcia)
+
+### Cell Ranger 
+
+#!/bin/bash
+#SBATCH --job-name=NGS_final
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=sheenafaye.garcia@nyulangone.org
+#SBATCH --ntasks=4
+#SBATCH --mem=32gb
+#SBATCH --time=12:00:00
+#SBATCH --output=/gpfs/scratch/sfg283/FinalProject/job_reports/NGS_final_%j.log
+#SBATCH -p cpu_short
+
+### STEP 1: MAKE RAT REFERENCE GENOME FOR CELLRANGER
+module load cellranger/3.0.0
+
+mkdir rat_genome
+wget ftp://ftp.ensembl.org/pub/release-96/fasta/rattus_norvegicus/dna/Rattus_norvegicus.Rnor_6.0.dna.toplevel.fa.gz
+wget ftp://ftp.ensembl.org/pub/release-96/gtf/rattus_norvegicus/Rattus_norvegicus.Rnor_6.0.96.gtf.gz
+
+gunzip Rattus_norvegicus.Rnor_6.0.dna.toplevel.fa.gz
+gunzip Rattus_norvegicus.Rnor_6.0.96.chr.gtf.gzsfg283
+
+#Make sure that when you sbatch this command, you allocate at least 8 core hours + at least 32 gb memory
+
+cellranger mkgtf Rattus_norvegicus.Rnor_6.0.96.chr.gtf genes_filtered.gtf --attribute=gene_biotype:protein_coding --attribute=gene_biotype:lincRNA --attribute=gene_biotype:antisense --attribute=gene_biotype:IG_LV_gene --attribute=gene_biotype:IG_V_gene --attribute=gene_biotype:IG_D_gene --attribute=gene_biotype:IG_J_gene --attribute=gene_biotype:IG_C_pseudogene --attribute=gene_biotype:TR_V_gene --attribute=gene_biotype:TR_D_gene --attribute=gene_biotype:TR_J_gene --attribute=gene_biotype:TR_C_gene
+
+
+cellranger mkref --genome=Rnor_6.0 --fasta=Rattus_norvegicus.Rnor_6.0.dna_rm.toplevel.fa --genes=Rattus_norvegicus.Rnor_6.0.96.chr.gtf
+
+### STEP 2: GET COUNTS VIA CELLRANGER
+
+# Make sure you give cellranger a *LOT* of time and memory (in this case, I requested for 128 GB RAM and 24 hours). In total, it took about 16.5 hours per scRNA dataset. 
+
+#!/bin/bash
+#SBATCH --job-name=NGS_final
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=sheenafaye.garcia@nyulangone.org
+#SBATCH --ntasks=4
+#SBATCH --mem=128gb
+#SBATCH --time=24:00:00
+#SBATCH --output=/gpfs/scratch/sfg283/FinalProject/job_reports/NGS_final_%j.log
+#SBATCH -p cpu_medium
+
+cd /gpfs/scratch/sfg283/FinalProject/
+module load cellranger/3.0.0
+
+cellranger count --localmem 128 --localcore 16 --transcriptome /gpfs/scratch/sfg283/FinalProject/rat_genome_2/Rnor_6.0 --fastqs /gpfs/scratch/sfg283/FinalProject/counts_early_2/ --sample early --id early 
+
+cellranger count --localmem=128 --localcore=16 --transcriptome=/gpfs/scratch/sfg283/FinalProject/rat_genome_2/rat --fastqs=/gpfs/scratch/sfg283/FinalProject/latent --sample=Latent --id=count_latent_2
+
+cellranger count --localmem=128 --localcore=16 --transcriptome=/gpfs/scratch/sfg283/FinalProject/rat_genome_2/rat --fastqs=/gpfs/scratch/sfg283/FinalProject/ly20 --sample=ly20 --id=count_LY20_s
+
+cellranger count --localmem=128 --localcore=16 --transcriptome=/gpfs/scratch/sfg283/FinalProject/rat_genome_2/rat --fastqs=/gpfs/scratch/sfg283/FinalProject/ly20 --sample=ly48 --id=count_LY48_2
+
+### SEURAT 
+
+### STEP 3: MAKE SEURAT OBJECTS
+# My computer didn’t have enough RAM to make the Seurat objects, so I ran most of this on BigPurple before transferring the RDS file to my local computer
+
+# On Bigpurple:
+
+cd /gpfs/scratch/sfg283/FinalProject/Seurat/
+
+module load r/3.5.1
+R
+
+install.packages('Seurat')
+install.packages('ggplot2')
+
+library(Seurat)
+library(ggplot2)
+
+### Import counts matrices and make Seurat objects 
+
+early_cm <- Read10X("/gpfs/scratch/sfg283/FinalProject/count_early_2/outs/filtered_feature_bc_matrix/")
+latent_cm <- Read10X("/gpfs/scratch/sfg283/FinalProject/count_latent/outs/filtered_feature_bc_matrix/")
+ly20_cm <- Read10X("/gpfs/scratch/sfg283/FinalProject/count_LY20_2/outs/filtered_feature_bc_matrix/")
+ly48_cm <- Read10X("/gpfs/scratch/sfg283/FinalProject/count_LY48_2/outs/filtered_feature_bc_matrix/")
+
+early_s <- CreateSeuratObject(counts = early_cm, project = "early")
+latent_s <- CreateSeuratObject(counts = latent_cm, project = "latent")
+ly20_s <- CreateSeuratObject(count = ly20_cm, project = "ly20")
+ly48_s <- CreateSeuratObject(count = ly48_cm, project = "ly48")
+
+# Save Seurat objects and download them onto local computer
+saveRDS(early_s, file=”early.rds”)
+saveRDS(latent_s, file=”latent.rds”)
+saveRDS(ly20_s, file=”ly20.rds”)
+saveRDS(ly48_s, file=”ly48.rds”)
+
+# On RStudio
+setwd ("C:/Users/winge_000/Documents/Sackler PhD Year 1/Next Generation Sequencing/Final Project/try 2")
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+early <- readRDS("early.rds")
+latent <- readRDS("latent.rds")
+ly20 <- readRDS("ly20.rds")
+ly48 <- readRDS("ly48.rds")
+
+### STEP 4: QUALITY CONTROL 
+
+early[["percent.mt"]] <- PercentageFeatureSet(early, pattern="^Mt-")
+latent[["percent.mt"]] <- PercentageFeatureSet(latent, pattern="^Mt-")
+ly20[["percent.mt"]] <- PercentageFeatureSet(ly20, pattern="^Mt-")
+ly48[["percent.mt"]] <- PercentageFeatureSet(ly48, pattern="^Mt-")
+
+# Examine violin plots to determine cutoffs for mt percentage
+
+VlnPlot(early, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+VlnPlot(latent, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+VlnPlot(ly20, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+VlnPlot(ly48, features=c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol=3)
+
+# FeatureScatter is used to visualize feature-feature relationships, but can be used for anything calculated by the object i.e. columns in object metadata, PC scores, etc.
+
+early_p1 <- FeatureScatter(early, feature1 = "nCount_RNA", feature2 = "percent.mt")
+early_p2 <- FeatureScatter(early, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots=list(early_p1, early_p2))
+
+latent_p1 <- FeatureScatter(latent, feature1 = "nCount_RNA", feature2 = "percent.mt")
+latent_p2 <- FeatureScatter(latent, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots=list(latent_p1, latent_p2))
+
+ly20_p1 <- FeatureScatter(ly20, feature1 = "nCount_RNA", feature2 = "percent.mt")
+ly20_p2 <- FeatureScatter(ly20, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots=list(ly20_p1, ly20_p2))
+
+ly48_p1 <- FeatureScatter(ly48, feature1 = "nCount_RNA", feature2 = "percent.mt")
+ly48_p2 <- FeatureScatter(ly48, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots=list(ly48_p1, ly48_p2))
+
+# Filter cells
+
+early_filt <- subset(early, subset=nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 25)
+latent_filt <- subset(latent, subset=nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 25)
+ly20_filt <- subset(ly20, subset=nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 25)
+ly48_filt <- subset(ly48, subset=nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 25)
+
+### STEP 5: NORMALIZATION (LOG NORMALIZATION > SCALE > PCA)
+
+early_norm <- NormalizeData(early_filt)
+latent_norm <- NormalizeData(latent_filt)
+ly20_norm <- NormalizeData(ly20_filt)
+ly48_norm <- NormalizeData(ly48_filt)
+
+# Feature selection: calculate the subset of features that exhibit high cell-to-cell variation in the dataset (highly expressed in some cells, while lowly expressed in others)
+
+early_norm <- FindVariableFeatures(early_norm, selection.method="vst", nfeatures=2000)
+early_top10 <- head(VariableFeatures(early_norm), 10)
+early_p1 <- VariableFeaturePlot(early_norm)
+early_p2 <- LabelPoints(plot=early_p1, points=early_top10, repel=TRUE)
+CombinePlots(plots=list(early_p1, early_p2))
+
+
+latent_norm <- FindVariableFeatures(latent_norm, selection.method="vst", nfeatures=2000)
+latent_top10 <- head(VariableFeatures(latent_norm), 10)
+latent_p1 <- VariableFeaturePlot(latent_norm)
+latent_p2 <- LabelPoints(plot=latent_p1, points=latent_top10, repel=TRUE, xnudge=0, ynudge=0)
+CombinePlots(plots=list(latent_p1, latent_p2))
+
+
+ly20_norm <- FindVariableFeatures(ly20_norm, selection.method="vst", nfeatures=2000)
+ly20_top10 <- head(VariableFeatures(ly20_norm), 10)
+ly20_p1 <- VariableFeaturePlot(ly20_norm)
+ly20_p2 <- LabelPoints(plot=ly20_p1, points=ly20_top10, repel=TRUE, xnudge=0, ynudge=0)
+CombinePlots(plots=list(ly20_p1, ly20_p2))
+
+ly48_norm <- FindVariableFeatures(ly48_norm, selection.method="vst", nfeatures=2000)
+ly48_top10 <- head(VariableFeatures(ly48_norm), 10)
+ly48_p1 <- VariableFeaturePlot(ly48_norm)
+ly48_p2 <- LabelPoints(plot=ly48_p1, points=ly48_top10, repel=TRUE, xnudge=0, ynudge=0)
+CombinePlots(plots=list(ly48_p1, ly48_p2))
+
+# Scale data
+
+early_all.genes <- rownames(early_norm)
+early_norm <- ScaleData(early_norm, features=early_all.genes)
+
+latent_all.genes <- rownames(latent_norm)
+latent_norm <- ScaleData(latent_norm, features=latent_all.genes)
+
+ly20_all.genes <- rownames(ly20_norm)
+ly20_norm <- ScaleData(ly20_norm, features=ly20_all.genes)
+
+ly48_all.genes <- rownames(ly48_norm)
+ly48_norm <- ScaleData(ly48_norm, features=ly48_all.genes)
+
+# Run Principal Component Analysis (PCA)
+
+early_pca <- RunPCA(early_norm, features=VariableFeatures(early_norm), npcs = 30)
+latent_pca <- RunPCA (latent_norm, features=VariableFeatures(latent_norm), npcs = 30)
+ly20_pca <- RunPCA(ly20_norm, features=VariableFeatures(ly20_norm), npcs = 30)
+ly48_pca <- RunPCA(ly48_norm, features=VariableFeatures(ly48_norm), npcs = 30)
+
+#Check number of dimensions to use based on Elbow plot; adjust number of PCs respectively
+### I chose 12 dims based on the elbow plots
+
+ElbowPlot(early_pca)
+ElbowPlot(latent_pca)
+ElbowPlot(ly20_pca)
+ElbowPlot(ly48_pca)
+
+### STEP 6: FIND CLUSTERS VIA TSNE
+
+# Run Initial TSNE
+
+early_tsne <- RunTSNE(early_pca, reduction="pca", dims=1:12)
+DimPlot(early_tsne, reduction="tsne")
+
+latent_tsne <- RunTSNE (latent_pca, reduction="pca", dims=1:12)
+DimPlot(latent_tsne, reduction="tsne")
+
+ly20_tsne <- RunTSNE (ly20_pca, reduction="pca", dims=1:12)
+DimPlot(ly20_tsne, reduction="tsne")
+
+ly48_tsne <- RunTSNE (ly48_pca, reduction="pca", dims=1:12)
+DimPlot(ly48_tsne, reduction="tsne")
+
+
+
+# Find Neighbours / Clusters
+
+early_tsne <- FindNeighbors(early_pca, reduction="pca", dims=1:12)
+early_tsne <- FindClusters(early_tsne, resolution=0.1)
+early_tsne <- RunTSNE(early_tsne)
+DimPlot(early_tsne, reduction="tsne")
+ggsave((DimPlot(early_tsne, reduction="tsne")), filename="early_tsne.png")
+
+latent_tsne <- FindNeighbors(latent_pca, reduction="pca", dims=1:12)
+latent_tsne <- FindClusters(latent_tsne, resolution=0.1)
+latent_tsne <- RunTSNE(latent_tsne)
+ggsave((DimPlot(latent_tsne, reduction="tsne")), filename="latent_tsne.png")
+
+ly20_tsne <- FindNeighbors(ly20_pca, reduction="pca", dims=1:12)
+ly20_tsne <- FindClusters(ly20_tsne, resolution=0.1)
+ly20_tsne <- RunTSNE(ly20_tsne)
+ggsave((DimPlot(ly20_tsne, reduction="tsne")), filename="ly20_tsne.png")
+
+ly48_tsne <- FindNeighbors(ly48_pca, reduction="pca", dims=1:12)
+ly48_tsne <- FindClusters(ly48_tsne, resolution=0.1)
+ly48_tsne <- RunTSNE(ly48_tsne)
+ggsave((DimPlot(ly48_tsne, reduction="tsne")), filename="ly48_tsne.png")
+
+### To determine what cell types were present, I took into account what cell types I expected in my sample as well as what marker genes were present in each cluster using the ‘FindMarkers’ function
+
+# Finding differentially expressed features (cluster biomarkers)
+
+early.markers <- FindAllMarkers(early_tsne, only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+early.top.markers <- early.markers %>% group_by(cluster) %>% top_n (n=5, wt=avg_logFC) 
+
+latent.markers <- FindAllMarkers(latent_tsne, only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+latent.top.markers <- latent.markers %>% group_by(cluster) %>% top_n (n=5, wt=avg_logFC) 
+
+ly20.markers <- FindAllMarkers(ly20_tsne, only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+ly20.top.markers <- ly20.markers %>% group_by(cluster) %>% top_n (n=5, wt=avg_logFC) 
+
+ly48.markers <- FindAllMarkers(ly48_tsne, only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+ly48.top.markers <- ly48.markers %>% group_by(cluster) %>% top_n (n=5, wt=avg_logFC) 
+
+# After a *LOT* of digging around the literature, I found genes that I wanted to examine. The following genes indicated the presence of the following cells:
+
+### Identifying cell types in samples 
+
+#Schwann cells 
+FeaturePlot(early_tsne, features=c("S100b", "Sox10", "Plp1", "Btc"))
+FeaturePlot(latent_tsne, features=c("S100b", "Sox10", "Plp1", "Btc")) 
+FeaturePlot(ly20_tsne, features=c("S100b", "Sox10", "Plp1", "Btc"))
+FeaturePlot(ly48_tsne, features=c("S100b", "Sox10", "Plp1", "Btc"))
+
+#FeaturePlot(latent_tsne, features=c("Ngfr", "Bdkrb2", "Mbp", "Mpz"))
+#Btc #Cmtm5 #Mpz is myelin precursor protein #Plp1 = myelin proteolipid protein
+
+#Connective tissue (fibroblasts?)
+FeaturePlot(early_tsne, features=c("Fstl1", "Col1a1", "Lox", "Fn1")) 
+FeaturePlot(latent_tsne, features=c("Fstl1", "Col1a1", "Lox", "Fn1")) 
+FeaturePlot(ly20_tsne, features=c("Fstl1", "Col1a1", "Lox", "Fn1")) 
+FeaturePlot(ly48_tsne, features=c("Fstl1", "Col1a1", "Lox", "Fn1")) 
+
+#Fibroblast specific
+FeaturePlot(latent_tsne, features=c("Ptgs2", "Mmp3"))
+
+#Satellite glial cells 
+#FeaturePlot(early_tsne, features=c("Cd163", "Cd11b","Lat", "Lck"))
+FeaturePlot(early_tsne, features=c("Pf4", "Cd68", "Glul", "Cd53"))
+FeaturePlot(latent_tsne, features=c("Pf4", "Cd68", "Glul", "Cd53"))
+FeaturePlot(ly20_tsne, features=c("Pf4", "Cd68", "Glul", "Cd53"))
+FeaturePlot(ly48_tsne, features=c("Pf4", "Cd68", "Glul", "Cd53"))
+
+
+#Peripheral sympathetic ganglionic neurons
+FeaturePlot(early_tsne, features=c("Snca", "Prph", "Ngfr", "Ntrk1"))
+FeaturePlot(latent_tsne, features=c("Snca", "Prph", "Ngfr", "Ntrk1"))
+FeaturePlot(ly20_tsne, features=c("Snca", "Prph", "Ngfr", "Ntrk1"))
+FeaturePlot(ly48_tsne, features=c("Snca", "Prph", "Ngfr", "Tubb3"))
+
+#Satellite glial cells 
+FeaturePlot(latent_tsne, features=c("Pf4", "C1qc", "Mmp9", "Timp1"))
+FeaturePlot(latent_tsne, features=c("Npc1", "Vim", "Mmp9", "Timp1"))
+FeaturePlot(latent_tsne, features=c("Npc1", "Vim", "Mmp9", "Timp1"))
+FeaturePlot(latent_tsne, features=c("Npc1", "Vim", "Mmp9", "Timp1"))
+
+### Using these markers genes, I identified my cell populations. Schwann cells, satellite glial cells, and connective tissue cells all appeared to form their own robust clusters, but the large cluster of peripheral neurons was separated into a bunch of smaller “subset” clusters 
+
+### It’s likely that neuronal subset cells exists, but with my lack of neuroscience background, I couldn’t figure out what neuron subsets to expect, so I decided to just combine all of the clusters that expressed my so-called “peripheral neuron” markers together and proceed from there
+
+### I combined the clusters on terminal, so I don’t have all of the code, but generally the process went like this:
+
+test4 <- ly48_tsne@meta.data$RNA_snn_res.0.1
+test4[which(test4==1)] <- 0
+test4[which(test4==5)] <- 0
+ly48_tsne@meta.data$test <- test4
+Idents(ly48_tsne) <- test4 
+
+### My computer was dying, so I saved the objects as they were before continuing with the analysis
+
+saveRDS(early_tsne, file=”early_tsne.rds”)
+saveRDS(latent_tsne, file=”latent_tsne.rds”)
+saveRDS(ly20_tsne, file=”ly20_tsne.rds”)
+saveRDS(ly48_tsne, file=”ly48_tsne.rds”)
+
+early <- readRDS ("early_tsne.rds")
+latent <- readRDS("latent_tsne.rds")
+ly20 <- readRDS("ly20_tsne.rds")
+ly48 <- readRDS("ly48_tsne.rds")
+
+### STEP 7: GET CELL TYPE COUNTS FOR EACH CONDITION
+
+# I renamed the identities
+
+early <- RenameIdents(early,
+                      '0' = "peripheral neuron",
+                      '1' = "connective tissue",
+                      '4' = "satellite glial cell",
+                      '6' = "Schwann cell"
+                      )
+
+latent <- RenameIdents(latent,
+                      '0' = "peripheral neuron",
+                      '2' = "connective tissue",
+                      '1' = "satellite glial cell",
+                      '4' = "Schwann cell"
+                      )
+
+ly20 <- RenameIdents(ly20,
+                       '0' = "peripheral neuron",
+                       '2' = "connective tissue",
+                       '3' = "satellite glial cell",
+                       '4' = "Schwann cell")
+
+ly48 <- RenameIdents(ly48,
+                     '0' = "peripheral neuron",
+                     '3' = "connective tissue",
+                     '2' = "satellite glial cell",
+                     '4' = "Schwann cell")
+
+DimPlot(early, label=TRUE)
+DimPlot(latent, label=TRUE)
+DimPlot(ly20, label=TRUE)
+DimPlot(ly48, label=TRUE)
+
+# Get cell type counts using ‘length’ function
+
+early_ident <- Idents(early)
+latent_ident <- Idents(latent)
+ly20_ident <- Idents(ly20)
+ly48_ident <- Idents(ly48)
+
+count_early.pn <- early_ident[which(early_ident=="peripheral neuron")]
+count_early.ct <- early_ident[which(early_ident=="connective tissue")]
+count_early.sc <- early_ident[which(early_ident=="Schwann cell")]
+count_early.sgc <- early_ident[which(early_ident=="satellite glial cell")]
+
+length(early_ident) #2003 (total number)
+length(count_early.pn) #1578
+length(count_early.ct) #348
+length(count_early.sc) #60
+length(count_early.sgc) #17
+
+count_latent.pn <- latent_ident[which(latent_ident=="peripheral neuron")]
+count_latent.ct <- latent_ident[which(latent_ident=="connective tissue")]
+count_latent.sc <- latent_ident[which(latent_ident=="Schwann cell")]
+count_latent.sgc <- latent_ident[which(latent_ident=="satellite glial cell")]
+
+length(latent_ident) #998
+length(count_latent.pn) #441
+length(count_latent.ct) #212
+length(count_latent.sc) #119
+length(count_latent.sgc) #226
+
+count_ly20.pn <- ly20_ident[which(ly20_ident=="peripheral neuron")]
+count_ly20.ct <- ly20_ident[which(ly20_ident=="connective tissue")]
+count_ly20.sc <- ly20_ident[which(ly20_ident=="Schwann cell")]
+count_ly20.sgc <- ly20_ident[which(ly20_ident=="satellite glial cell")]
+
+# Interesting how I have a lot more cells for ly20 despite performing the same filtering on this dataset that I did on the other three
+
+length(ly20_ident) #5297 
+length(count_ly20.pn) #4449
+length(count_ly20.ct) #406
+length(count_ly20.sc) #91
+length(count_ly20.sgc) #351
+
+count_ly48.pn <- ly48_ident[which(ly48_ident=="peripheral neuron")]
+count_ly48.ct <- ly48_ident[which(ly48_ident=="connective tissue")]
+count_ly48.sc <- ly48_ident[which(ly48_ident=="Schwann cell")]
+count_ly48.sgc <- ly48_ident[which(ly48_ident=="satellite glial cell")]
+
+length(ly48_ident) #1370
+length(count_ly48.pn) #853
+length(count_ly48.ct) #177
+length(count_ly48.sc) #109
+length(count_ly48.sgc) #226
+
+### I copied the numbers into Excel and got percentages, then made a graph using those numbers in GraphPad Prism
+
+### STEP 8: MERGE DATASETS
+
+# I gave each Seurat object a new column (called “condition”) so that I could sort then later on when I merge the four into one Seurat object
+
+early$condition <- "early"
+latent$condition <- "latent"
+ly20$condition <- "ly20"
+ly48$condition <- "ly48"
+
+early <- FindVariableFeatures(early, selection.method="vst", nfeatures=2000)
+latent <- FindVariableFeatures(latent, selection.method="vst", nfeatures=2000)
+ly20 <- FindVariableFeatures(ly20, selection.method="vst", nfeatures=2000)
+ly48 <- FindVariableFeatures(ly48, selection.method="vst", nfeatures=2000)
+
+# Integration 
+
+fp.anchors <- FindIntegrationAnchors(object.list=list(early, latent, ly20, ly48), dims=1:12)
+fp <- IntegrateData(anchorset=fp.anchors, dims=1:12)
+
+
+
+# Processing (log normalize > scale > PCA > find neighbours > find clusters)
+
+Fp <- NormalizeData(fp)
+fp <- ScaleData(fp)
+fp <- RunPCA(fp, npcs=30)
+
+fp <- FindNeighbors(fp, reduction="pca", dims=1:12)
+fp <- FindClusters(fp, resolution=0.1)
+fp <- RunTSNE(fp)
+DimPlot(fp, reduction="tsne")
+
+### Check cluster markers / features using same genes I identified previously
+
+# Connective tissue
+FeaturePlot(fp, features=c("Fstl1", "Col1a1", "Lox", "Fn1"))
+
+# Schwann cells
+FeaturePlot(fp, features=c("S100b", "Sox10", "Plp1", "Btc"))
+
+# Satellite glial cells
+FeaturePlot(fp, features=c("Pf4", "Cd68", "Glul", "Cd53"))
+
+# Peripheral sympathetic neurons
+FeaturePlot(fp, features=c("Snca", "Prph", "Tubb3", "Ntrk1"))
+
+### Rename identities
+
+# I first grouped the clusters together, by using  marker genes to determine the cell types
+
+test <- fp@meta.data$integrated_snn_res.0.1
+test[which(test==3)] <- 0
+test[which(test==4)] <- 0
+test[which(test==6)] <- 0
+test[which(test==7)] <- 2
+Idents(fp) <- test
+
+DimPlot(fp, reduction="tsne")
+
+fp <- RenameIdents(fp,
+                   '0' = "peripheral neuron",
+                   '1' = "connective tissue",
+                   '2' = "satellite glial cell",
+                   '5' = "Schwann cell")
+
+DimPlot(fp, reduction="tsne", label=TRUE)
+
+### STEP 9: DIFFERENTIAL EXPRESSION ANALYSIS
+
+# Subset identities
+DefaultAssay(fp) <- "RNA"
+
+peri.neurons <- subset(fp, idents="peripheral neuron")
+Idents(peri.neurons) <- "condition"
+avg.peri.neurons <- log1p(AverageExpression(peri.neurons)$RNA)
+avg.peri.neurons$gene <-rownames(avg.peri.neurons)
+
+connective <- subset(fp, idents="connective tissue")
+Idents(connective) <- "condition"
+avg.connective <- log1p(AverageExpression(connective)$RNA)
+avg.connective$gene <-rownames(avg.connective)
+
+schwann <- subset(fp, idents="Schwann cell")
+Idents(schwann) <- "condition"
+avg.schwann <- log1p(AverageExpression(schwann)$RNA)
+avg.schwann$gene <-rownames(avg.schwann)
+
+sgc <- subset(fp, idents="satellite glial cell")
+Idents(sgc) <- "condition"
+avg.sgc <- log1p(AverageExpression(sgc)$RNA)
+avg.sgc$gene <-rownames(avg.sgc)
+
+### Differential Expression Tests
+
+### I made lists containing only genes with positive fold changes. The FindMarkers command works by seeing how the genes in ident.1 (latent) compare to ident.2 (early AKA our control). By changing ident.1 and ident.2, I can change what I’m conditions I compare
+
+## Peripheral neurons
+pn.markers.ela <- FindMarkers(peri.neurons, ident.1="latent", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ela <- pn.markers.ela[order(pn.markers.ela$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ely20 <- FindMarkers(peri.neurons, ident.1="ly20", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ely20 <- pn.markers.ely20[order(pn.markers.ely20$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ely48 <- FindMarkers(peri.neurons, ident.1="ly48", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ely48 <- pn.markers.ely48[order(pn.markers.ely48$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ly20ly48 <- FindMarkers(peri.neurons, ident.1="ly48", ident.2="ly20", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ly20ly48 <- pn.markers.ly20ly48[order(pn.markers.ly20ly48$avg_logFC, decreasing=TRUE),]
+
+pn.markers.lly20 <- FindMarkers(peri.neurons, ident.1="ly20", ident.2="latent", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+pn.markers.lly20 <- pn.markers.lly20[order(pn.markers.lly20$avg_logFC, decreasing=TRUE),]
+
+### I looked at the genes with the top *positive* fold changes and labelled them on the scatter plot
+
+genes.to.label=c("Mt1", "Jund", "Rps5a", "Gadd45a", "Kif22", "LOC100360841", "Atf3", "AABR07031666.1", "Rps21", "Rps19")
+p1<- ggplot(avg.peri.neurons, aes(early, latent)) + geom_point() + ggtitle("Peripheral Neurons: Early VS Latent")
+p1 <- LabelPoints(plot=p1, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+p1
+
+genes.to.label=c("Mt2a","Adcyap1", "Vip", "Mt1", "Lcn2", "Slpi", "Cartpt", "Timp1", "Resp18", "Mmd", "Tnfrsf12a")
+p2 <- ggplot(avg.peri.neurons, aes(early, ly20)) + geom_point() + ggtitle("Peripheral Neurons: Early VS Ly20 (Reactivation Phase I)")
+p2 <- LabelPoints(plot=p2, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+p2
+
+genes.to.label=c("Ngfr", "Ret", "Slc6a", "Mbnl2", "Acly", "Syt", "Fgf13", "Dbh", "Ywhag", "Olfm1")
+p3 <- ggplot(avg.peri.neurons, aes(early, ly48)) + geom_point() + ggtitle("Peripheral Neurons: Early VS Ly48 (Reactivation Phase II)")
+p3 <- LabelPoints(plot=p3, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+p3
+
+genes.to.label=c("Etv1", "Fgf13", "Mbnl2", "Nap1l5", "Ywhag", "Jund", "LOC498750", "Ret", "Ngfr", "Snap91", "Rab6a", "Pja2")
+p4 <- ggplot(avg.peri.neurons, aes(ly20, ly48)) + geom_point() + ggtitle("Peripheral Neurons: Ly20 VS Ly48 (Reactivation Phase I VS Phase II)")
+p4 <- LabelPoints(plot=p4, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+p4
+
+genes.to.label=c("Vip", "Bsg", "Resp18", "Vgf", "Mgp", "Timp1", "Lcn2", "Ppib")
+p5 <- ggplot(avg.peri.neurons, aes(latent, ly20)) + geom_point() + ggtitle("Peripheral Neurons: Latent VS Reactivation (Phase I)")
+p5 <- LabelPoints(plot=p5, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+p5
+
+## Connective tissue cells
+
+con.markers.ela <- FindMarkers(connective, ident.1="latent", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+con.markers.ela <- con.markers.ela[order(con.markers.ela$avg_logFC, decreasing=TRUE),]
+
+con.markers.ely20 <- FindMarkers(connective, ident.1="ly20", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+con.markers.ely20 <- con.markers.ely20[order(con.markers.ely20$avg_logFC, decreasing=TRUE),]
+
+con.markers.ely48 <- FindMarkers(connective, ident.1="ly48", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+con.markers.ely48 <- con.markers.ely48[order(con.markers.ely48$avg_logFC, decreasing=TRUE),]
+
+con.markers.ly20ly48 <- FindMarkers(connective, ident.1="ly48", ident.2="ly20", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+con.markers.ly20ly48 <- con.markers.ly20ly48[order(con.markers.ly20ly48$avg_logFC, decreasing=TRUE),]
+
+con.markers.lly20 <- FindMarkers(connective, ident.1="ly20", ident.2="latent", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+con.markers.lly20 <- con.markers.lly20[order(con.markers.lly20$avg_logFC, decreasing=TRUE),]
+
+genes.to.label=c("AC134224.3", "Mt1", "Gja1")
+c1<- ggplot(avg.connective, aes(early, latent)) + geom_point() + ggtitle("Connective Tissue Cells: Early VS Latent")
+c1 <- LabelPoints(plot=c1, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(c1, file="c1.png")
+
+genes.to.label=c("Slpi", "Lcn2", "Cxcl6", "Uchl1", "Sncg", "Prph", "Tubb3", "Fabp5", "Mmd", "Stmn2")
+c2 <- ggplot(avg.connective, aes(early, ly20)) + geom_point() + ggtitle("Connective Tissue Cells: Early VS Ly20 (Reactivation Phase I)")
+c2 <- LabelPoints(plot=c2, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(c2, file="c2.png")
+
+genes.to.label=c("Slpi", "Cxcl6", "Lcn2", "Mmp9", "Ccl20", "Mt1", "Cyp7b1", "Lpl", "Ptgs2", "Mt2A")
+c3 <- ggplot(avg.connective, aes(early, ly48)) + geom_point() + ggtitle("Connective Tissue Cells: Early VS Ly48 (Reactivation Phase II)")
+c3 <- LabelPoints(plot=c3, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(c3, file="c3.png")
+
+genes.to.label=c("Mmp9", "Serpine1")
+c4 <- ggplot(avg.connective, aes(ly20, ly48)) + geom_point() + ggtitle("Connective Tissue Cells: Ly20 VS Ly48 (Reactivation Phase I VS Phase II)")
+c4 <- LabelPoints(plot=c4, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(c4, file="c4.png")
+
+genes.to.label=c("Slpi", "Lcn2", "Uchl1", "Stmn2", "Sncg", "Cxcl6", "Prph", "Fabp5", "Gap43")
+c5 <- ggplot(avg.connective, aes(latent, ly20)) + geom_point() + ggtitle("Connective Tissue Cells: Latent VS Reactivation (Phase I)")
+c5 <- LabelPoints(plot=c5, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(c5, file="c5.png")
+
+## Schwann cells
+
+sc.markers.ela <- FindMarkers(schwann, ident.1="latent", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sc.markers.ela <- sc.markers.ela[order(sc.markers.ela$avg_logFC, decreasing=TRUE),]
+
+sc.markers.ely20 <- FindMarkers(schwann, ident.1="ly20", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sc.markers.ely20 <- sc.markers.ely20[order(sc.markers.ely20$avg_logFC, decreasing=TRUE),]
+
+sc.markers.ely48 <- FindMarkers(schwann, ident.1="ly48", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sc.markers.ely48 <- sc.markers.ely48[order(sc.markers.ely48$avg_logFC, decreasing=TRUE),]
+
+sc.markers.ly20ly48 <- FindMarkers(schwann, ident.1="ly48", ident.2="ly20", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sc.markers.ly20ly48 <- sc.markers.ly20ly48[order(sc.markers.ly20ly48$avg_logFC, decreasing=TRUE),]
+
+sc.markers.lly20 <- FindMarkers(schwann, ident.1="ly20", ident.2="latent", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sc.markers.lly20 <- sc.markers.lly20[order(sc.markers.lly20$avg_logFC, decreasing=TRUE),]
+
+genes.to.label=c("Rps19", "LOC100360841", "Rpl41", "Rps6", "LOC103690821", "LOC108350501")
+sc1<- ggplot(avg.schwann, aes(early, latent)) + geom_point() + ggtitle("Schwann Cells: Early VS Latent")
+sc1 <- LabelPoints(plot=sc1, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sc1, file="sc1.png")
+
+genes.to.label=c("Mt2A", "Mt1", "Tubb3", "LOC100912564.2", "Prph", "Id4", "Tmem176a", "Mgp")
+sc2 <- ggplot(avg.schwann, aes(early, ly20)) + geom_point() + ggtitle("Schwann Cells: Early VS Ly20 (Reactivation Phase I)")
+sc2 <- LabelPoints(plot=sc2, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sc2, file="sc2.png")
+
+genes.to.label=c("Mt2A", "Mt1", "Fxyd1", "Sod2", "Cebpd", "Ugt1a3", "Col16a1", "LOC100912564.2", "Slc44a1", "App")
+sc3 <- ggplot(avg.schwann, aes(early, ly48)) + geom_point() + ggtitle("Schwann Cells: Early VS Ly48 (Reactivation Phase II)")
+sc3 <- LabelPoints(plot=sc3, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sc3, file="sc3.png")
+
+genes.to.label=c("Fxyd1", "Col5a3", "Nfkbia")
+sc4 <- ggplot(avg.schwann, aes(ly20, ly48)) + geom_point() + ggtitle("Schwann Cells: Ly20 VS Ly48 (Reactivation Phase I VS Phase II)")
+sc4 <- LabelPoints(plot=sc4, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sc4, file="sc4.png")
+
+genes.to.label=c("Mt2A", "Mt1", "Stmn2", "Gstp1", "Prph", "Id4", "Fabp5", "Sncg", "Lcn2", "Uchl1")
+sc5 <- ggplot(avg.schwann, aes(latent, ly20)) + geom_point() + ggtitle("Schwann Cells: Latent VS Reactivation (Phase I)")
+sc5 <- LabelPoints(plot=sc5, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sc5, file="sc5.png")
+
+## Satellite glial cells
+
+sgc.markers.ela <- FindMarkers(sgc, ident.1="latent", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sgc.markers.ela <- sgc.markers.ela[order(sgc.markers.ela$avg_logFC, decreasing=TRUE),]
+
+sgc.markers.ely20 <- FindMarkers(sgc, ident.1="ly20", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sgc.markers.ely20 <- sgc.markers.ely20[order(sgc.markers.ely20$avg_logFC, decreasing=TRUE),]
+
+sgc.markers.ely48 <- FindMarkers(sgc, ident.1="ly48", ident.2="early", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sgc.markers.ely48 <- sgc.markers.ely48[order(sgc.markers.ely48$avg_logFC, decreasing=TRUE),]
+
+sgc.markers.ly20ly48 <- FindMarkers(sgc, ident.1="ly48", ident.2="ly20", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sgc.markers.ly20ly48 <- sgc.markers.ly20ly48[order(sgc.markers.ly20ly48$avg_logFC, decreasing=TRUE),]
+
+sgc.markers.lly20 <- FindMarkers(sgc, ident.1="ly20", ident.2="latent", only.pos=TRUE, min.pct=0.25, logfc.threshold=0.25)
+sgc.markers.lly20 <- sgc.markers.lly20[order(sgc.markers.lly20$avg_logFC, decreasing=TRUE),]
+
+genes.to.label=c("Ccl9", "Lpl", "Rps19", "Rpl29", "Rplp1", "Rpl41", "Rps21", "Rpl32", "Rpl26", "Rpl36")
+sgc1<- ggplot(avg.sgc, aes(early, latent)) + geom_point() + ggtitle("Satellite Glial Cells: Early VS Latent")
+sgc1 <- LabelPoints(plot=sgc1, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sgc1, file="sgc1.png")
+
+genes.to.label=c("Mt2A", "Lcn2", "Sncg", "Uchl1")
+sgc2 <- ggplot(avg.sgc, aes(early, ly20)) + geom_point() + ggtitle("Satellite Glial Cells: Early VS Ly20 (Reactivation Phase I)")
+sgc2 <- LabelPoints(plot=sgc2, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sgc2, file="sgc2.png")
+
+genes.to.label=c("Lcn2", "Slpi", "Ccn3", "Lyz2", "Cybb", "Psap")
+sgc3 <- ggplot(avg.sgc, aes(early, ly48)) + geom_point() + ggtitle("Satellite Glial Cells: Early VS Ly48 (Reactivation Phase II)")
+sgc3 <- LabelPoints(plot=sgc3, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sgc3, file="sgc3.png")
+
+genes.to.label=c("Apoe", "Pltp", "Gstp1", "Ctsc", "Bcl2a1", "Ccl3", "Il1b")
+sgc4 <- ggplot(avg.sgc, aes(ly20, ly48)) + geom_point() + ggtitle("Satellite Glial Cells: Ly20 VS Ly48 (Reactivation Phase I VS Phase II)")
+sgc4 <- LabelPoints(plot=sgc4, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sgc4, file="sgc4.png")
+
+genes.to.label=c("Mt2A", "Lcn2", "Stmn2", "Uchl1", "Tuba1a", "Prph")
+sgc5 <- ggplot(avg.sgc, aes(latent, ly20)) + geom_point() + ggtitle("Satellite Glial Cells: Latent VS Reactivation (Phase I)")
+sgc5 <- LabelPoints(plot=sgc5, points=genes.to.label, repel=TRUE, xnudge=0, ynudge=0)
+ggsave(sgc5, file="sgc5.png")
+
+### Because this process allowed me to compile all of the /positively/ regulated genes (positive logfc), if I take that number of genes and then subtract it from the *total* number of regulated genes (i.e. run the same command, but without “only.pos=TRUE”), then I could determine the number of upregulated and downregulated genes per condition
+
+# Get number of genes with *positive* fold changes
+
+nrow(pn.markers.ela) #275
+nrow(pn.markers.ely20) #160
+nrow(pn.markers.ely48) #370
+nrow(pn.markers.ly20ly48) #438
+nrow(pn.markers.lly20) #417
+
+nrow(con.markers.ela) #199
+nrow(con.markers.ely20) #184
+nrow(con.markers.ely48) #129
+nrow(con.markers.ly20ly48) #95
+nrow(con.markers.lly20) #378
+
+nrow(sc.markers.ela) #256
+nrow(sc.markers.ely20) #249
+nrow(sc.markers.ely48) #320
+nrow(sc.markers.ly20ly48) #224
+nrow(sc.markers.lly20) #342
+
+nrow(sgc.markers.ela)  #209
+nrow(sgc.markers.ely20) #195
+nrow(sgc.markers.ely48) #104
+nrow(sgc.markers.ly20ly48) #79
+nrow(sgc.markers.lly20) #311
+
+### Getting total gene lists
+
+pn.markers.ela <- FindMarkers(peri.neurons, ident.1="latent", ident.2="early", min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ela <- pn.markers.ela[order(pn.markers.ela$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ely20 <- FindMarkers(peri.neurons, ident.1="ly20", ident.2="early", min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ely20 <- pn.markers.ely20[order(pn.markers.ely20$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ely48 <- FindMarkers(peri.neurons, ident.1="ly48", ident.2="early", min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ely48 <- pn.markers.ely48[order(pn.markers.ely48$avg_logFC, decreasing=TRUE),]
+
+pn.markers.ly20ly48 <- FindMarkers(peri.neurons, ident.1="ly48", ident.2="ly20", min.pct=0.25, logfc.threshold=0.25)
+pn.markers.ly20ly48 <- pn.markers.ly20ly48[order(pn.markers.ly20ly48$avg_logFC, decreasing=TRUE),]
+
+pn.markers.lly20 <- FindMarkers(peri.neurons, ident.1="ly20", ident.2="latent",  min.pct=0.25, logfc.threshold=0.25)
+pn.markers.lly20 <- pn.markers.lly20[order(pn.markers.lly20$avg_logFC, decreasing=TRUE),]
+
+write.csv(pn.markers.ela, file="pn_markers_ela.csv")
+write.csv(pn.markers.ely20, file="pn_markers_ely20.csv")
+write.csv(pn.markers.ely48, file="pn_markers_ely48.csv")
+write.csv(pn.markers.ly20ly48, file="pn_markers_ly20ly48.csv")
+write.csv(pn.markers.lly20, file="pn_markers_lly20.csv")
+
+#Total number of genes regulated
+
+nrow(pn.markers.ela) #798
+nrow(pn.markers.ely20) #516
+nrow(pn.markers.ely48) #846
+nrow(pn.markers.ly20ly48) #710
+nrow(pn.markers.lly20) #880
+
+nrow(con.markers.ela) #716
+nrow(con.markers.ely20) #627
+nrow(con.markers.ely48) #849
+nrow(con.markers.ly20ly48) #449
+nrow(con.markers.lly20) #754
+
+nrow(sc.markers.ela) #907
+nrow(sc.markers.ely20) #996
+nrow(sc.markers.ely48) #1176
+nrow(sc.markers.ly20ly48) #480
+nrow(sc.markers.lly20) #790
+
+nrow(sgc.markers.ela) #543
+nrow(sgc.markers.ely20) #638
+nrow(sgc.markers.ely48) #795
+nrow(sgc.markers.ly20ly48) #476
+nrow(sgc.markers.lly20) #796
+
+### I took the numbers and plotted them using Excel and GraphPad
+
+### Finally, with the gene lists in Excel files, I took those and found which pathways were enriched using David / Cytoscape / GSEA
